@@ -1,0 +1,92 @@
+---
+
+- name: add public key
+  apt_key:
+    url: https://packages.irods.org/irods-signing-key.asc
+    state: present
+
+- name: Install dependent python packages
+  apt: name={{item}}
+  with_items:
+     - python-apt
+     - python3-apt
+#add custom irods repo to apt
+- apt_repository:
+    repo: deb [arch=amd64] https://packages.irods.org/apt/ xenial main
+    state: present
+
+#- name: add custom irods repo to apt
+#  command: echo "deb [arch=amd64] https://packages.irods.org/apt/ $(lsb_release -sc) main" | sudo tee /etc/apt/sources.list.d/renci-irods.list
+#  sudo: yes
+
+- name: ensure apt cache is up to date
+  apt: update_cache=yes
+  sudo: yes
+
+#- name: set up postgrSQL
+#  command: sudo su - postgres
+
+- name: Create PostgrSQL Database
+  postgresql_db: 
+    name: "{{ dbname }}"
+  become: yes
+  become_user: postgres
+
+- name: grant access to user
+  postgresql_user: db={{dbname}} name={{dbuser}} password={{dbpassword}} priv=ALL
+  become: yes
+  become_user: postgres
+
+- name: Install iCat server and Postgres plugin
+  apt: name={{item}}
+  with_items:
+     - irods-server
+     - irods-database-plugin-postgres
+
+- name: response bootstrapping
+  template: src=genresponse.j2 dest=/home/{{ ansible_ssh_user }}/genresponse.sh
+
+- name: generate setup responses
+  shell: 
+     mkdir -p /opt/irods;
+     mv /home/{{ ansible_ssh_user }}/genresponse.sh /opt/irods/genresponse.sh;
+     chmod +x /opt/irods/genresponse.sh;
+     /opt/irods/genresponse.sh /opt/irods/setup_responses
+
+- name: config iCAT server
+  shell: python /var/lib/irods/scripts/setup_irods.py < /opt/irods/setup_responses
+  become: yes
+  #script: /var/lib/irods/scripts/setup_irods.py < /opt/irods/setup_responses
+
+# creating a testfile to put it into iRods
+- file:
+    path: /home/ubuntu/test_file
+    state: touch
+    mode: "u=rw,g=rw,o=rw"
+# creating a temp file to store password
+- file:
+    path: /home/ubuntu/pass
+    state: touch
+    mode: "u=rw,g=rw,o=rw"
+
+- name: writing password to a file
+  shell: echo {{ dbpassword }} > /home/ubuntu/pass
+  become: yes
+
+- name: generate folder
+  shell:
+     mkdir -p /home/ubuntu/.irods;
+     cp /var/lib/irods/.irods/irods_environment.json /home/ubuntu/.irods/irods_environment.json
+
+- name: put a sample testfile
+  shell:
+    sudo iinit < /home/ubuntu/pass;
+    sudo iput /home/ubuntu/test_file -f
+  become: yes
+  become_user: ubuntu
+
+# removing the temp file which has password
+- file:
+    path: /home/ubuntu/pass
+    state: absent
+
